@@ -3,6 +3,13 @@
 #define TILE_SIZE_IN_PIXELS 8
 #define MAX_LIGHTS_PER_TILE 1024
 
+struct gpu_ssao_inputs
+{
+    m4 VPTransform;
+    v4 HemisphereSamples[64];
+    v4 RandomRotations[16]; // NOTE: 4x4
+};
+
 struct tiled_deferred_globals
 {
     // TODO: Move to camera?
@@ -48,5 +55,13 @@ struct tiled_deferred_state
     vk_pipeline* GBufferPipeline;
     vk_pipeline* LightCullPipeline;
     vk_pipeline* LightingPipeline;
+
+    // NOTE: SSAO data
+    VkImage SsaoImage;
+    render_target_entry SsaoEntry;
+    VkBuffer SsaoInputBuffer;
+    VkDescriptorSetLayout SsaoDescLayout;
+    VkDescriptorSet SsaoDescriptor;
+    render_fullscreen_pass SsaoPass;
 };
 

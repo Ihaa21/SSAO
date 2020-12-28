@@ -17,17 +17,20 @@ inline void TiledDeferredSwapChainChange(tiled_deferred_state* State, u32 Width,
     // NOTE: Render Target Data
     {
         RenderTargetEntryReCreate(&State->RenderTargetArena, Width, Height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
                                   VK_IMAGE_ASPECT_COLOR_BIT, &State->GBufferPositionImage, &State->GBufferPositionEntry);
         RenderTargetEntryReCreate(&State->RenderTargetArena, Width, Height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
                                   VK_IMAGE_ASPECT_COLOR_BIT, &State->GBufferNormalImage, &State->GBufferNormalEntry);
         RenderTargetEntryReCreate(&State->RenderTargetArena, Width, Height, VK_FORMAT_R32G32B32A32_SFLOAT,
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                   VK_IMAGE_ASPECT_COLOR_BIT, &State->GBufferColorImage, &State->GBufferColorEntry);
         RenderTargetEntryReCreate(&State->RenderTargetArena, Width, Height, VK_FORMAT_D32_SFLOAT,
-                                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT,
                                   VK_IMAGE_ASPECT_DEPTH_BIT, &State->DepthImage, &State->DepthEntry);
+        RenderTargetEntryReCreate(&State->RenderTargetArena, Width, Height, VK_FORMAT_R32_SFLOAT,
+                                  VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                                  VK_IMAGE_ASPECT_COLOR_BIT, &State->SsaoImage, &State->SsaoEntry);
         RenderTargetEntryReCreate(&State->RenderTargetArena, Width, Height, ColorFormat,
                                   VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
                                   VK_IMAGE_ASPECT_COLOR_BIT, &State->OutColorImage, &State->OutColorEntry);
@@ -50,6 +53,8 @@ inline void TiledDeferredSwapChainChange(tiled_deferred_state* State, u32 Width,
                                State->GBufferColorEntry.View, DemoState->PointSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         VkDescriptorImageWrite(&RenderState->DescriptorManager, State->TiledDeferredDescriptor, 11, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
                                State->DepthEntry.View, DemoState->PointSampler, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        VkDescriptorImageWrite(&RenderState->DescriptorManager, State->TiledDeferredDescriptor, 12, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                               State->SsaoEntry.View, DemoState->PointSampler, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
     
     // NOTE: Tiled Data
@@ -165,6 +170,7 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
             VkDescriptorLayoutAdd(&Builder, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
             VkDescriptorLayoutAdd(&Builder, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
             VkDescriptorLayoutAdd(&Builder, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
+            VkDescriptorLayoutAdd(&Builder, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
             
             VkDescriptorLayoutEnd(RenderState->Device, &Builder);
         }
@@ -188,6 +194,18 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
                                                               "shader_tiled_deferred_grid_frustum.spv", "main", Layouts, ArrayCount(Layouts));
     }
 
+    // NOTE: Ssao Data
+    {
+        vk_descriptor_layout_builder Builder = VkDescriptorLayoutBegin(&Result->SsaoDescLayout);
+        VkDescriptorLayoutAdd(&Builder, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT);
+        VkDescriptorLayoutEnd(RenderState->Device, &Builder);
+
+        Result->SsaoDescriptor = VkDescriptorSetAllocate(RenderState->Device, RenderState->DescriptorPool, Result->SsaoDescLayout);
+        Result->SsaoInputBuffer = VkBufferCreate(RenderState->Device, &RenderState->GpuArena, VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+                                                 sizeof(gpu_ssao_inputs));
+        VkDescriptorBufferWrite(&RenderState->DescriptorManager, Result->SsaoDescriptor, 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, Result->SsaoInputBuffer);
+    }
+
     TiledDeferredSwapChainChange(Result, CreateInfo.Width, CreateInfo.Height, CreateInfo.ColorFormat, CreateInfo.Scene, OutputRtSet);
 
     // NOTE: Create PSOs
@@ -202,6 +220,7 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
                 RenderTargetAddTarget(&Builder, &Result->GBufferNormalEntry, VkClearColorCreate(0, 0, 0, 1));
                 RenderTargetAddTarget(&Builder, &Result->GBufferColorEntry, VkClearColorCreate(0, 0, 0, 1));
                 RenderTargetAddTarget(&Builder, &Result->DepthEntry, VkClearDepthStencilCreate(0, 0));
+                RenderTargetAddTarget(&Builder, &Result->SsaoEntry, VkClearColorCreate(0, 0, 0, 0));
                             
                 vk_render_pass_builder RpBuilder = VkRenderPassBuilderBegin(&DemoState->TempArena);
 
@@ -217,6 +236,9 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
                 u32 DepthId = VkRenderPassAttachmentAdd(&RpBuilder, Result->DepthEntry.Format, VK_ATTACHMENT_LOAD_OP_CLEAR,
                                                         VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED,
                                                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                u32 SsaoId = VkRenderPassAttachmentAdd(&RpBuilder, Result->SsaoEntry.Format, VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                                       VK_ATTACHMENT_STORE_OP_STORE, VK_IMAGE_LAYOUT_UNDEFINED,
+                                                       VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
                 VkRenderPassSubPassBegin(&RpBuilder, VK_PIPELINE_BIND_POINT_GRAPHICS);
                 VkRenderPassColorRefAdd(&RpBuilder, GBufferPositionId, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
@@ -225,9 +247,17 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
                 VkRenderPassDepthRefAdd(&RpBuilder, DepthId, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
                 VkRenderPassSubPassEnd(&RpBuilder);
 
-                VkRenderPassDependency(&RpBuilder, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                VkRenderPassDependency(&RpBuilder, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                       VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
                                        VK_ACCESS_SHADER_READ_BIT, VK_DEPENDENCY_BY_REGION_BIT);
+
+                VkRenderPassSubPassBegin(&RpBuilder, VK_PIPELINE_BIND_POINT_GRAPHICS);
+                VkRenderPassInputRefAdd(&RpBuilder, GBufferPositionId, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                VkRenderPassInputRefAdd(&RpBuilder, GBufferNormalId, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                VkRenderPassInputRefAdd(&RpBuilder, DepthId, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+                VkRenderPassColorRefAdd(&RpBuilder, SsaoId, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+                VkRenderPassSubPassEnd(&RpBuilder);
 
                 Result->GBufferPass = RenderTargetBuilderEnd(&Builder, VkRenderPassBuilderEnd(&RpBuilder, RenderState->Device));
             }
@@ -265,7 +295,24 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
             
                 Result->GBufferPipeline = VkPipelineBuilderEnd(&Builder, RenderState->Device, &RenderState->PipelineManager,
                                                                Result->GBufferPass.RenderPass, 0, DescriptorLayouts, ArrayCount(DescriptorLayouts));
+            }
+            
+            // NOTE: SSAO Pipeline
+            {
+                VkDescriptorSetLayout DescriptorLayouts[] =
+                    {
+                        Result->TiledDeferredDescLayout,
+                        Result->SsaoDescLayout,
+                    };
 
+                VkDescriptorSet Descriptors[] =
+                    {
+                        Result->TiledDeferredDescriptor,
+                        Result->SsaoDescriptor,
+                    };
+
+                Result->SsaoPass = FullScreenPassCreate("shader_standard_ssao_frag.spv", "main", &Result->GBufferPass, 1,
+                                                        ArrayCount(DescriptorLayouts), DescriptorLayouts, ArrayCount(Descriptors), Descriptors);
             }
         }
         
@@ -303,7 +350,8 @@ inline void TiledDeferredCreate(renderer_create_info CreateInfo, VkDescriptorSet
 
                 Result->LightingPass = RenderTargetBuilderEnd(&Builder, VkRenderPassBuilderEnd(&RpBuilder, RenderState->Device));
             }
-
+            
+            // NOTE: Lighting Pipeline
             {
                 vk_pipeline_builder Builder = VkPipelineBuilderBegin(&DemoState->TempArena);
 
@@ -357,8 +405,8 @@ inline void TiledDeferredRender(vk_commands Commands, tiled_deferred_state* Stat
         vkCmdFillBuffer(Commands.Buffer, State->LightIndexCounter_T, 0, sizeof(u32), 0);
     }
     
-    // NOTE: GBuffer Pass
     RenderTargetPassBegin(&State->GBufferPass, Commands, RenderTargetRenderPass_SetViewPort | RenderTargetRenderPass_SetScissor);
+    // NOTE: GBuffer Pass
     {
         vkCmdBindPipeline(Commands.Buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, State->GBufferPipeline->Handle);
         {
@@ -391,6 +439,9 @@ inline void TiledDeferredRender(vk_commands Commands, tiled_deferred_state* Stat
             vkCmdDrawIndexed(Commands.Buffer, CurrMesh->NumIndices, 1, 0, 0, InstanceId);
         }
     }
+    RenderTargetNextSubPass(Commands);
+    // NOTE: SSAO Pass
+    FullScreenPassRender(Commands, &State->SsaoPass);
     RenderTargetPassEnd(Commands);
     
     // NOTE: Light Culling Pass
@@ -411,8 +462,8 @@ inline void TiledDeferredRender(vk_commands Commands, tiled_deferred_state* Stat
     vkCmdPipelineBarrier(Commands.Buffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                          VK_DEPENDENCY_BY_REGION_BIT, 0, 0, 0, 0, 0, 0);
     
-    // NOTE: Lighting Pass
     RenderTargetPassBegin(&State->LightingPass, Commands, RenderTargetRenderPass_SetViewPort | RenderTargetRenderPass_SetScissor);
+    // NOTE: Lighting Pass
     {
         vkCmdBindPipeline(Commands.Buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, State->LightingPipeline->Handle);
         {

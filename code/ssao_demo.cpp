@@ -1,9 +1,14 @@
 
-#include "light_rendering_demo.h"
-#include "forward.cpp"
-#include "deferred.cpp"
-#include "tiled_forward.cpp"
+#include "ssao_demo.h"
 #include "tiled_deferred.cpp"
+
+// TODO: Add Random Floats
+
+inline f32 RandomFloat()
+{
+    f32 Result = static_cast<f32>(rand()) / static_cast<f32>(RAND_MAX);
+    return Result;
+}
 
 //
 // NOTE: Asset Storage System
@@ -41,8 +46,8 @@ inline void SceneOpaqueInstanceAdd(render_scene* Scene, u32 MeshId, m4 WTransfor
 
     instance_entry* Instance = Scene->OpaqueInstances + Scene->NumOpaqueInstances++;
     Instance->MeshId = MeshId;
-    Instance->WVTransform = CameraGetV(&Scene->Camera)*WTransform;
-    Instance->WVPTransform = CameraGetP(&Scene->Camera)*Instance->WVTransform;
+    Instance->WTransform = WTransform;
+    Instance->WVPTransform = CameraGetVP(&Scene->Camera)*Instance->WTransform;
 }
 
 inline void ScenePointLightAdd(render_scene* Scene, v3 Pos, v3 Color, f32 MaxDistance)
@@ -235,22 +240,11 @@ DEMO_INIT(Init)
         CreateInfo.MaterialDescLayout = DemoState->Scene.MaterialDescLayout;
         CreateInfo.SceneDescLayout = DemoState->Scene.SceneDescLayout;
         CreateInfo.Scene = &DemoState->Scene;
-#ifdef FORWARD_RENDERING
-        ForwardCreate(CreateInfo, &DemoState->CopyToSwapDesc, &DemoState->ForwardState);
-#endif
-#ifdef DEFERRED_RENDERING
-        DeferredCreate(CreateInfo, &DemoState->CopyToSwapDesc, &DemoState->DeferredState);
-#endif
-#ifdef TILED_FORWARD_RENDERING
-        TiledForwardCreate(CreateInfo, &DemoState->CopyToSwapDesc, &DemoState->TiledForwardState);
-#endif
-#ifdef TILED_DEFERRED_RENDERING
         TiledDeferredCreate(CreateInfo, &DemoState->CopyToSwapDesc, &DemoState->TiledDeferredState);
-#endif
     }
 
     // NOTE: Copy To Swap FullScreen Pass
-    DemoState->CopyToSwapPass = FullScreenPassCreate("shader_copy_to_swap_frag.spv", "main", &DemoState->CopyToSwapTarget, 1,
+    DemoState->CopyToSwapPass = FullScreenPassCreate("shader_copy_to_swap_frag.spv", "main", &DemoState->CopyToSwapTarget, 0, 1,
                                                      &DemoState->CopyToSwapDescLayout, 1, &DemoState->CopyToSwapDesc);
     
     // NOTE: Upload assets
@@ -293,12 +287,7 @@ DEMO_INIT(Init)
         DemoState->Cube = SceneMeshAdd(Scene, WhiteTexture, WhiteTexture, AssetsPushCube());
         DemoState->Sphere = SceneMeshAdd(Scene, WhiteTexture, WhiteTexture, AssetsPushSphere(64, 64));
 
-#ifdef DEFERRED_RENDERING
-        DeferredAddMeshes(&DemoState->DeferredState, Scene->RenderMeshes + DemoState->Quad, Scene->RenderMeshes + DemoState->Sphere);
-#endif
-#ifdef TILED_DEFERRED_RENDERING
         TiledDeferredAddMeshes(&DemoState->TiledDeferredState, Scene->RenderMeshes + DemoState->Quad);
-#endif
 
         VkDescriptorManagerFlush(RenderState->Device, &RenderState->DescriptorManager);
         VkTransferManagerFlush(&RenderState->TransferManager, RenderState->Device, RenderState->Commands.Buffer, &RenderState->BarrierManager);
@@ -321,22 +310,8 @@ DEMO_SWAPCHAIN_CHANGE(SwapChainChange)
 
     DemoState->Scene.Camera.AspectRatio = f32(RenderState->WindowWidth / RenderState->WindowHeight);
     
-#ifdef FORWARD_RENDERING
-    ForwardSwapChainChange(&DemoState->ForwardState, RenderState->WindowWidth, RenderState->WindowHeight,
-                           DemoState->SwapChainFormat, &DemoState->Scene, &DemoState->CopyToSwapDesc);
-#endif
-#ifdef DEFERRED_RENDERING
-    DeferredSwapChainChange(&DemoState->DeferredState, RenderState->WindowWidth, RenderState->WindowHeight,
-                            DemoState->SwapChainFormat, &DemoState->Scene, &DemoState->CopyToSwapDesc);
-#endif
-#ifdef TILED_FORWARD_RENDERING
-    TiledForwardSwapChainChange(&DemoState->TiledForwardState, RenderState->WindowWidth, RenderState->WindowHeight,
-                                DemoState->SwapChainFormat, &DemoState->Scene, &DemoState->CopyToSwapDesc);
-#endif
-#ifdef TILED_DEFERRED_RENDERING
     TiledDeferredSwapChainChange(&DemoState->TiledDeferredState, RenderState->WindowWidth, RenderState->WindowHeight,
                                  DemoState->SwapChainFormat, &DemoState->Scene, &DemoState->CopyToSwapDesc);
-#endif
 }
 
 DEMO_CODE_RELOAD(CodeReload)
@@ -377,20 +352,12 @@ DEMO_MAIN_LOOP(MainLoop)
         {
             // NOTE: Add Instances
             {
-                i32 NumX = 1;
-                i32 NumY = 1;
-                i32 NumZ = 1;
-                for (i32 Z = -NumZ; Z <= NumZ; ++Z)
-                {
-                    for (i32 Y = -NumY; Y <= NumY; ++Y)
-                    {
-                        for (i32 X = -NumX; X <= NumX; ++X)
-                        {
-                            m4 Transform = M4Pos(V3(X, Y, Z)) * M4Scale(V3(0.25f));
-                            SceneOpaqueInstanceAdd(Scene, DemoState->Sphere, Transform);
-                        }
-                    }
-                }
+                SceneOpaqueInstanceAdd(Scene, DemoState->Sphere, M4Pos(V3(0)));
+                SceneOpaqueInstanceAdd(Scene, DemoState->Cube, M4Pos(V3(0, 0, 5)) * M4Scale(V3(10, 10, 1)));
+                SceneOpaqueInstanceAdd(Scene, DemoState->Cube, M4Pos(V3(0, -5, 0)) * M4Scale(V3(10, 1, 10)));
+                SceneOpaqueInstanceAdd(Scene, DemoState->Cube, M4Pos(V3(0, 5, 0)) * M4Scale(V3(10, 1, 10)));
+                SceneOpaqueInstanceAdd(Scene, DemoState->Cube, M4Pos(V3(-5, 0, 0)) * M4Scale(V3(1, 10, 10)));
+                SceneOpaqueInstanceAdd(Scene, DemoState->Cube, M4Pos(V3(5, 0, 0)) * M4Scale(V3(1, 10, 10)));
                 
                 gpu_instance_entry* GpuData = VkTransferPushWriteArray(&RenderState->TransferManager, Scene->OpaqueInstanceBuffer, gpu_instance_entry, Scene->NumOpaqueInstances,
                                                                        BarrierMask(VkAccessFlagBits(0), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT),
@@ -398,24 +365,18 @@ DEMO_MAIN_LOOP(MainLoop)
 
                 for (u32 InstanceId = 0; InstanceId < Scene->NumOpaqueInstances; ++InstanceId)
                 {
-                    GpuData[InstanceId].WVTransform = Scene->OpaqueInstances[InstanceId].WVTransform;
+                    GpuData[InstanceId].WTransform = Scene->OpaqueInstances[InstanceId].WTransform;
                     GpuData[InstanceId].WVPTransform = Scene->OpaqueInstances[InstanceId].WVPTransform;
                 }
             }
             
-            // NOTE: Add point lights
-            ScenePointLightAdd(Scene, V3(0.0f, 0.0f, -1.0f), V3(1.0f, 0.0f, 0.0f), 1);
-            ScenePointLightAdd(Scene, V3(-1.0f, 0.0f, 0.0f), V3(1.0f, 1.0f, 0.0f), 1);
-            ScenePointLightAdd(Scene, V3(0.0f, 1.0f, 1.0f), V3(1.0f, 0.0f, 1.0f), 1);
-            ScenePointLightAdd(Scene, V3(0.0f, -1.0f, 1.0f), V3(0.0f, 1.0f, 1.0f), 1);
-            ScenePointLightAdd(Scene, V3(-1.0f, 0.0f, -1.0f), V3(0.0f, 0.0f, 1.0f), 1);
-            
-            SceneDirectionalLightSet(Scene, Normalize(V3(0.0f, 0.0f, 1.0f)), 0.3f*V3(1.0f, 1.0f, 1.0f), V3(0, 0, 0)); //V3(0.4f, 0.4f, 0.4f));
+            SceneDirectionalLightSet(Scene, Normalize(V3(1.0f, 0.4f, 0.0f)), 0.3f*V3(1.0f, 1.0f, 1.0f), V3(0.4f, 0.4f, 0.4f));
         }        
         
         // NOTE: Push Point Lights
+        if (Scene->NumPointLights > 0)
         {
-            point_light* PointLights = VkTransferPushWriteArray(&RenderState->TransferManager, Scene->PointLightBuffer, point_light, Scene->MaxNumPointLights,
+            point_light* PointLights = VkTransferPushWriteArray(&RenderState->TransferManager, Scene->PointLightBuffer, point_light, Scene->NumPointLights,
                                                                 BarrierMask(VkAccessFlagBits(0), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT),
                                                                 BarrierMask(VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT));
             m4* Transforms = VkTransferPushWriteArray(&RenderState->TransferManager, Scene->PointLightTransforms, m4, Scene->NumPointLights,
@@ -440,7 +401,8 @@ DEMO_MAIN_LOOP(MainLoop)
                                                                    BarrierMask(VK_ACCESS_SHADER_READ_BIT, VK_PIPELINE_STAGE_VERTEX_SHADER_BIT));
             Copy(&Scene->DirectionalLight, GpuData, sizeof(directional_light));
         }
-        
+
+        // NOTE: Push Scene Globals
         {
             scene_globals* Data = VkTransferPushWriteStruct(&RenderState->TransferManager, Scene->SceneBuffer, scene_globals,
                                                             BarrierMask(VkAccessFlagBits(0), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT),
@@ -450,23 +412,39 @@ DEMO_MAIN_LOOP(MainLoop)
             Data->NumPointLights = Scene->NumPointLights;
         }
 
+        // NOTE: Push Scene Globals
+        {
+            gpu_ssao_inputs* Data = VkTransferPushWriteStruct(&RenderState->TransferManager, DemoState->TiledDeferredState.SsaoInputBuffer, gpu_ssao_inputs,
+                                                            BarrierMask(VkAccessFlagBits(0), VK_PIPELINE_STAGE_ALL_COMMANDS_BIT),
+                                                            BarrierMask(VK_ACCESS_UNIFORM_READ_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT));
+            *Data = {};
+
+            Data->VPTransform = CameraGetVP(&DemoState->Scene.Camera);
+
+            for (u32 SampleId = 0; SampleId < ArrayCount(Data->HemisphereSamples); ++SampleId)
+            {
+                Data->HemisphereSamples[SampleId] = V4(RandomFloat() * 2.0f - 1.0f, RandomFloat() * 2.0f - 1.0f, RandomFloat(), 0.0f);
+                // NOTE: Rescale to be in a hemisphere, not a box
+                Data->HemisphereSamples[SampleId].xyz = RandomFloat() * Normalize(Data->HemisphereSamples[SampleId].xyz);
+
+                // TODO: Rescale to be closer to the origin
+            }
+
+            for (u32 RotationId = 0; RotationId < ArrayCount(Data->RandomRotations); ++RotationId)
+            {
+                Data->RandomRotations[RotationId].xy = V2(RandomFloat() * 2.0f - 1.0f, RandomFloat() * 2.0f - 1.0f);
+            }
+        }
+
         VkTransferManagerFlush(&RenderState->TransferManager, RenderState->Device, RenderState->Commands.Buffer, &RenderState->BarrierManager);
     }
 
     // NOTE: Render Scene
-#ifdef FORWARD_RENDERING
-    ForwardRender(Commands, &DemoState->ForwardState, &DemoState->Scene);
-#endif
-#ifdef DEFERRED_RENDERING
-    DeferredRender(Commands, &DemoState->DeferredState, &DemoState->Scene);
-#endif
-#ifdef TILED_FORWARD_RENDERING
-    TiledForwardRender(Commands, &DemoState->TiledForwardState, &DemoState->Scene);
-#endif
-#ifdef TILED_DEFERRED_RENDERING
     TiledDeferredRender(Commands, &DemoState->TiledDeferredState, &DemoState->Scene);
-#endif
+
+    RenderTargetPassBegin(&DemoState->CopyToSwapTarget, Commands, RenderTargetRenderPass_SetViewPort | RenderTargetRenderPass_SetScissor);
     FullScreenPassRender(Commands, &DemoState->CopyToSwapPass);
+    RenderTargetPassEnd(Commands);
     
     VkCheckResult(vkEndCommandBuffer(Commands.Buffer));
                     

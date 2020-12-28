@@ -7,119 +7,10 @@
 #include "shader_blinn_phong_lighting.cpp"
 
 //
-// NOTE: Math
-//
-
-struct plane
-{
-    vec3 Normal;
-    float Distance;
-};
-
-struct frustum
-{
-    // NOTE: Left, Right, Top, Bottom
-    plane Planes[4];
-};
-
-plane PlaneCreate(vec3 P0, vec3 P1, vec3 P2)
-{
-    plane Result;
-
-    vec3 V0 = P1 - P0;
-    vec3 V1 = P2 - P0;
-    Result.Normal = normalize(cross(V0, V1));
-    Result.Distance = dot(Result.Normal, P0);
-    
-    return Result;
-}
-
-bool SphereInsidePlane(vec3 SphereCenter, float SphereRadius, plane Plane)
-{
-    bool Result = dot(Plane.Normal, SphereCenter) - Plane.Distance < -SphereRadius;
-    return Result;
-}
-
-bool SphereInsideFrustum(vec3 SphereCenter, float SphereRadius, frustum Frustum, float NearZ, float FarZ)
-{
-    bool Result = true;
-
-    if (SphereCenter.z + SphereRadius < NearZ || SphereCenter.z - SphereRadius > FarZ)
-    {
-        Result = false;
-    }
-
-    for (int PlaneId = 0; PlaneId < 4; ++PlaneId)
-    {
-        if (SphereInsidePlane(SphereCenter, SphereRadius, Frustum.Planes[PlaneId]))
-        {
-            Result = false;
-        }
-    }
-    
-    return Result;
-}
-
-vec4 ClipToView(mat4 InverseProjection, vec4 ClipPos)
-{
-    vec4 Result = InverseProjection * ClipPos;
-    Result = Result / Result.w;
-    return Result;
-}
-
-vec4 ScreenToView(mat4 InverseProjection, vec2 ScreenSize, vec4 ScreenPos)
-{
-    vec2 Ndc = 2.0f * (ScreenPos.xy / ScreenSize) - vec2(1.0f);
-    vec4 Result = ClipToView(InverseProjection, vec4(Ndc, ScreenPos.zw));
-    return Result;
-}
-
-//
 // NOTE: Descriptor Sets
 //
 
-#define TILE_DIM_IN_PIXELS 8
-
-layout(set = 0, binding = 0) uniform tiled_deferred_globals
-{
-    mat4 InverseProjection;
-    vec2 ScreenSize;
-    uvec2 GridSize;
-};
-
-layout(set = 0, binding = 1) buffer grid_frustums
-{
-    frustum GridFrustums[];
-};
-
-// NOTE: Opaque Data
-layout(set = 0, binding = 2, rg32ui) uniform uimage2D LightGrid_O;
-layout(set = 0, binding = 3) buffer light_index_list_opaque
-{
-    uint LightIndexList_O[];
-};
-layout(set = 0, binding = 4) buffer light_index_counter_opaque
-{
-    uint LightIndexCounter_O;
-};
-
-// NOTE: Transparent Data
-layout(set = 0, binding = 5, rg32ui) uniform uimage2D LightGrid_T;
-layout(set = 0, binding = 6) buffer light_index_list_transparent
-{
-    uint LightIndexList_T[];
-};
-layout(set = 0, binding = 7) buffer light_index_counter_transparent
-{
-    uint LightIndexCounter_T;
-};
-
-// NOTE: GBuffer Data
-layout(set = 0, binding = 8) uniform sampler2D GBufferPositionTexture;
-layout(set = 0, binding = 9) uniform sampler2D GBufferNormalTexture;
-layout(set = 0, binding = 10) uniform sampler2D GBufferColorTexture;
-layout(set = 0, binding = 11) uniform sampler2D GBufferDepthTexture;
-
+TILED_DEFERRED_DESCRIPTOR_LAYOUT(0)
 SCENE_DESCRIPTOR_LAYOUT(1)
 MATERIAL_DESCRIPTOR_LAYOUT(2)
 
@@ -307,8 +198,8 @@ layout(location = 0) in vec3 InPos;
 layout(location = 1) in vec3 InNormal;
 layout(location = 2) in vec2 InUv;
 
-layout(location = 0) out vec3 OutViewPos;
-layout(location = 1) out vec3 OutViewNormal;
+layout(location = 0) out vec3 OutWorldPos;
+layout(location = 1) out vec3 OutWorldNormal;
 layout(location = 2) out vec2 OutUv;
 
 void main()
@@ -316,8 +207,8 @@ void main()
     instance_entry Entry = InstanceBuffer[gl_InstanceIndex];
     
     gl_Position = Entry.WVPTransform * vec4(InPos, 1);
-    OutViewPos = (Entry.WVTransform * vec4(InPos, 1)).xyz;
-    OutViewNormal = (Entry.WVTransform * vec4(InNormal, 0)).xyz;
+    OutWorldPos = (Entry.WTransform * vec4(InPos, 1)).xyz;
+    OutWorldNormal = (Entry.WTransform * vec4(InNormal, 0)).xyz;
     OutUv = InUv;
 }
 
@@ -329,19 +220,19 @@ void main()
 
 #if GBUFFER_FRAG
 
-layout(location = 0) in vec3 InViewPos;
-layout(location = 1) in vec3 InViewNormal;
+layout(location = 0) in vec3 InWorldPos;
+layout(location = 1) in vec3 InWorldNormal;
 layout(location = 2) in vec2 InUv;
 
-layout(location = 0) out vec4 OutViewPos;
-layout(location = 1) out vec4 OutViewNormal;
+layout(location = 0) out vec4 OutWorldPos;
+layout(location = 1) out vec4 OutWorldNormal;
 layout(location = 2) out vec4 OutColor;
 
 void main()
 {
-    OutViewPos = vec4(InViewPos, 0);
+    OutWorldPos = vec4(InWorldPos, 0);
     // TODO: Add normal mapping
-    OutViewNormal = vec4(normalize(InViewNormal), 0);
+    OutWorldNormal = vec4(normalize(InWorldNormal), 0);
     OutColor = texture(ColorTexture, InUv);
 }
 
@@ -372,12 +263,13 @@ layout(location = 0) out vec4 OutColor;
 
 void main()
 {
-    vec3 CameraPos = vec3(0, 0, 0);
+    vec3 CameraPos = SceneBuffer.CameraPos;
     ivec2 PixelPos = ivec2(gl_FragCoord.xy);
     
     vec3 SurfacePos = texelFetch(GBufferPositionTexture, PixelPos, 0).xyz;
     vec3 SurfaceNormal = texelFetch(GBufferNormalTexture, PixelPos, 0).xyz;
     vec3 SurfaceColor = texelFetch(GBufferColorTexture, PixelPos, 0).rgb;
+    float Ao = texelFetch(SsaoTexture, PixelPos, 0).x;
     vec3 View = normalize(CameraPos - SurfacePos);
 
     vec3 Color = vec3(0);
@@ -396,10 +288,11 @@ void main()
     // NOTE: Calculate lighting for directional lights
     {
         Color += BlinnPhongLighting(View, SurfaceColor, SurfaceNormal, 32, DirectionalLight.Dir, DirectionalLight.Color);
-        Color += DirectionalLight.AmbientLight * SurfaceColor;
+        Color += Ao * DirectionalLight.AmbientLight * SurfaceColor;
     }
 
     OutColor = vec4(Color, 1);
+    OutColor = vec4(vec3(Ao), 1);
 }
 
 #endif

@@ -26,11 +26,6 @@
     
  */
 
-//#define FORWARD_RENDERING
-//#define DEFERRED_RENDERING
-#define TILED_FORWARD_RENDERING
-//#define TILED_DEFERRED_RENDERING
-
 struct directional_light
 {
     v3 Color;
@@ -58,13 +53,13 @@ struct scene_globals
 struct instance_entry
 {
     u32 MeshId;
-    m4 WVTransform;
+    m4 WTransform;
     m4 WVPTransform;
 };
 
 struct gpu_instance_entry
 {
-    m4 WVTransform;
+    m4 WTransform;
     m4 WVPTransform;
 };
 
@@ -91,9 +86,6 @@ struct renderer_create_info
     render_scene* Scene;
 };
 
-#include "forward.h"
-#include "deferred.h"
-#include "tiled_forward.h"
 #include "tiled_deferred.h"
 
 struct render_scene
@@ -152,18 +144,7 @@ struct demo_state
     u32 Cube;
     u32 Sphere;
 
-#ifdef FORWARD_RENDERING
-    forward_state ForwardState;
-#endif
-#ifdef DEFERRED_RENDERING
-    deferred_state DeferredState;
-#endif
-#ifdef TILED_FORWARD_RENDERING
-    tiled_forward_state TiledForwardState;
-#endif
-#ifdef TILED_DEFERRED_RENDERING
     tiled_deferred_state TiledDeferredState;
-#endif
 };
 
 global demo_state* DemoState;
